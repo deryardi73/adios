@@ -2127,18 +2127,3 @@ index 0000000000..c7f380bb65
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION(ADIOS_PROGNAME);
 \ No newline at end of file
-diff --git a/block/elevator.c b/block/elevator.c
---- a/block/elevator.c
-+++ b/block/elevator.c
-@@ -830,4 +830,5 @@
- 	if (rbprev)
- 		return rb_entry_rq(rbprev);
- 	return NULL;
- }
-+EXPORT_SYMBOL(elv_rb_former_request);
-@@ -840,4 +841,5 @@
- 	if (rbnext)
- 		return rb_entry_rq(rbnext);
- 	return NULL;
- }
-+EXPORT_SYMBOL(elv_rb_latter_request);
