@@ -894,11 +894,12 @@ index 0000000000..c7f380bb65
 +}
 +
 +// The number of requests in the queue was notified from the block layer
-+static void adios_depth_updated(struct request_queue *q) {
-+	struct adios_data *ad = q->elevator->elevator_data;
++static void adios_depth_updated(struct blk_mq_hw_ctx *hctx) {
++ struct request_queue *q = hctx->queue;
++ struct adios_data *ad = q->elevator->elevator_data;
 +
 +	ad->async_depth = q->nr_requests;
-+	blk_mq_set_min_shallow_depth(q, 1);
++	// blk_mq_set_min_shallow_depth(q, 1); //
 +}
 +
 +// Handle request merging after a merge operation
@@ -1458,7 +1459,7 @@ index 0000000000..c7f380bb65
 +
 +// Timer callback function to periodically update latency models
 +static void update_timer_callback(struct timer_list *t) {
-+	struct adios_data *ad = timer_container_of(ad, t, update_timer);
++	struct adios_data *ad = from_timer(ad, t, update_timer);
 +
 +	for (u8 optype = 0; optype < ADIOS_OPTYPES; optype++)
 +		latency_model_update(ad, &ad->latency_model[optype]);
@@ -1548,16 +1549,27 @@ index 0000000000..c7f380bb65
 +}
 +
 +// Initialize the scheduler-specific data when initializing the request queue
-+static int adios_init_sched(struct request_queue *q, struct elevator_queue *eq) {
-+	struct adios_data *ad;
-+	int ret = -ENOMEM;
-+	u8 optype = 0;
++static int adios_init_sched(struct request_queue *q, struct elevator_type *e)
++{
++ struct adios_data *ad;
++ struct elevator_queue *eq;
 +
-+	ad = kzalloc_node(sizeof(*ad), GFP_KERNEL, q->node);
-+	if (!ad) {
-+		pr_err("adios: Failed to create adios_data\n");
-+		goto put_eq;
-+	}
++ eq = elevator_alloc(q, e);
++ if (!eq)
++ return -ENOMEM;
++
++ ad = kzalloc_node(sizeof(*ad), GFP_KERNEL, q->node);
++ if (!ad) {
++ kobject_put(&eq->kobj);
++ return -ENOMEM;
++ }
++
++ eq->elevator_data = ad;
++ q->elevator = eq;
++ ad->async_depth = q->nr_requests;
++
++ return 0;
+}
 +
 +	eq->elevator_data = ad;
 +
@@ -1651,7 +1663,7 @@ index 0000000000..c7f380bb65
 +
 +	eq->elevator_data = ad;
 +
-+	ad->is_rotational = !!(q->limits.features & BLK_FEAT_ROTATIONAL);
++	ad->is_rotational = !blk_queue_nonrot(q);
 +	ad->global_latency_window = (ad->is_rotational)?
 +		default_global_latency_window_rotational:
 +		default_global_latency_window;
