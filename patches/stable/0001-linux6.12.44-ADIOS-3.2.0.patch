@@ -1,14 +1,14 @@
-From d5ad78794db603cf0190fde5d32bd0e1934df04b Mon Sep 17 00:00:00 2001
+From 37ec3bc797d28bcd5ca7d315d8b67b1fc7bdac86 Mon Sep 17 00:00:00 2001
 From: Masahito S <firelzrd@gmail.com>
 Date: Mon, 23 Feb 2026 05:16:37 +0900
-Subject: [PATCH] linux6.12.44-ADIOS-3.2.0
+Subject: [PATCH] linux6.19.3-ADIOS-3.2.0
 
 ---
  block/Kconfig.iosched |   14 +
  block/Makefile        |    8 +
- block/adios.c         | 2076 +++++++++++++++++++++++++++++++++++++++++
- block/elevator.c      |    5 +
- 4 files changed, 2103 insertions(+)
+ block/adios.c         | 2062 +++++++++++++++++++++++++++++++++++++++++
+ block/elevator.c      |   19 +-
+ 4 files changed, 2096 insertions(+), 7 deletions(-)
  create mode 100644 block/adios.c
 
 diff --git a/block/Kconfig.iosched b/block/Kconfig.iosched
@@ -21,7 +21,7 @@ index 27f11320b8..e98585dd83 100644
  
 +config MQ_IOSCHED_ADIOS
 +	tristate "Adaptive Deadline I/O scheduler"
-+	default m
++	default y
 +	help
 +	  The Adaptive Deadline I/O Scheduler (ADIOS) is a multi-queue I/O
 +	  scheduler with learning-based adaptive latency control.
@@ -29,7 +29,7 @@ index 27f11320b8..e98585dd83 100644
 +config MQ_IOSCHED_DEFAULT_ADIOS
 +	bool "Enable ADIOS I/O scheduler as default MQ I/O scheduler"
 +	depends on MQ_IOSCHED_ADIOS=y
-+	default n
++	default y
 +	help
 +	  Enable the ADIOS I/O scheduler as the default scheduler for MQ I/O.
 +
@@ -37,10 +37,10 @@ index 27f11320b8..e98585dd83 100644
  	tristate "BFQ I/O scheduler"
  	select BLK_ICQ
 diff --git a/block/Makefile b/block/Makefile
-index ddfd21c1a9..ebe14e94d1 100644
+index c65f4da937..105b12fd86 100644
 --- a/block/Makefile
 +++ b/block/Makefile
-@@ -23,6 +23,7 @@ obj-$(CONFIG_BLK_CGROUP_IOLATENCY)	+= blk-iolatency.o
+@@ -22,6 +22,7 @@ obj-$(CONFIG_BLK_CGROUP_IOLATENCY)	+= blk-iolatency.o
  obj-$(CONFIG_BLK_CGROUP_IOCOST)	+= blk-iocost.o
  obj-$(CONFIG_MQ_IOSCHED_DEADLINE)	+= mq-deadline.o
  obj-$(CONFIG_MQ_IOSCHED_KYBER)	+= kyber-iosched.o
@@ -48,7 +48,7 @@ index ddfd21c1a9..ebe14e94d1 100644
  bfq-y				:= bfq-iosched.o bfq-wf2q.o bfq-cgroup.o
  obj-$(CONFIG_IOSCHED_BFQ)	+= bfq.o
  
-@@ -38,3 +39,10 @@ obj-$(CONFIG_BLK_INLINE_ENCRYPTION)	+= blk-crypto.o blk-crypto-profile.o \
+@@ -36,3 +37,9 @@ obj-$(CONFIG_BLK_INLINE_ENCRYPTION)	+= blk-crypto.o blk-crypto-profile.o \
  					   blk-crypto-sysfs.o
  obj-$(CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK)	+= blk-crypto-fallback.o
  obj-$(CONFIG_BLOCK_HOLDER_DEPRECATED)	+= holder.o
@@ -58,13 +58,12 @@ index ddfd21c1a9..ebe14e94d1 100644
 +
 +clean:
 +	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
-+
 diff --git a/block/adios.c b/block/adios.c
 new file mode 100644
-index 0000000000..6e54b5c3be
+index 0000000000..c7f380bb65
 --- /dev/null
 +++ b/block/adios.c
-@@ -0,0 +1,2076 @@
+@@ -0,0 +1,2062 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Adaptive Deadline I/O Scheduler (ADIOS)
@@ -895,14 +894,11 @@ index 0000000000..6e54b5c3be
 +}
 +
 +// The number of requests in the queue was notified from the block layer
-+static void adios_depth_updated(struct blk_mq_hw_ctx *hctx) {
-+	struct request_queue *q = hctx->queue;
++static void adios_depth_updated(struct request_queue *q) {
 +	struct adios_data *ad = q->elevator->elevator_data;
-+	struct blk_mq_tags *tags = hctx->sched_tags;
 +
 +	ad->async_depth = q->nr_requests;
-+
-+	sbitmap_queue_min_shallow_depth(&tags->bitmap_tags, 1);
++	blk_mq_set_min_shallow_depth(q, 1);
 +}
 +
 +// Handle request merging after a merge operation
@@ -1462,7 +1458,7 @@ index 0000000000..6e54b5c3be
 +
 +// Timer callback function to periodically update latency models
 +static void update_timer_callback(struct timer_list *t) {
-+	struct adios_data *ad = from_timer(ad, t, update_timer);
++	struct adios_data *ad = timer_container_of(ad, t, update_timer);
 +
 +	for (u8 optype = 0; optype < ADIOS_OPTYPES; optype++)
 +		latency_model_update(ad, &ad->latency_model[optype]);
@@ -1551,30 +1547,19 @@ index 0000000000..6e54b5c3be
 +	return atomic_read(&ad->state) != 0;
 +}
 +
-+// Initialize the scheduler-specific data for a hardware queue
-+static int adios_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx) {
-+	adios_depth_updated(hctx);
-+	return 0;
-+}
-+
 +// Initialize the scheduler-specific data when initializing the request queue
-+static int adios_init_sched(struct request_queue *q, struct elevator_type *e) {
++static int adios_init_sched(struct request_queue *q, struct elevator_queue *eq) {
 +	struct adios_data *ad;
-+	struct elevator_queue *eq;
 +	int ret = -ENOMEM;
 +	u8 optype = 0;
-+
-+	eq = elevator_alloc(q, e);
-+	if (!eq) {
-+		pr_err("adios: Failed to allocate the elevator\n");
-+		return ret;
-+	}
 +
 +	ad = kzalloc_node(sizeof(*ad), GFP_KERNEL, q->node);
 +	if (!ad) {
 +		pr_err("adios: Failed to create adios_data\n");
 +		goto put_eq;
 +	}
++
++	eq->elevator_data = ad;
 +
 +	// Create a memory pool for adios_rq_data
 +	ad->rq_data_cache = kmem_cache_create("adios_rq_data",
@@ -1694,6 +1679,7 @@ index 0000000000..6e54b5c3be
 +	blk_stat_enable_accounting(q);
 +
 +	q->elevator = eq;
++	adios_depth_updated(q);
 +	return 0;
 +
 +free_buckets:
@@ -2110,7 +2096,6 @@ index 0000000000..6e54b5c3be
 +		.completed_request	= adios_completed_request,
 +		.finish_request		= adios_finish_request,
 +		.has_work			= adios_has_work,
-+		.init_hctx			= adios_init_hctx,
 +		.init_sched			= adios_init_sched,
 +		.exit_sched			= adios_exit_sched,
 +	},
@@ -2143,26 +2128,28 @@ index 0000000000..6e54b5c3be
 +MODULE_DESCRIPTION(ADIOS_PROGNAME);
 \ No newline at end of file
 diff --git a/block/elevator.c b/block/elevator.c
-index 1f76e9efd7..2f3244d15f 100644
 --- a/block/elevator.c
 +++ b/block/elevator.c
-@@ -564,11 +564,16 @@ static struct elevator_type *elevator_get_default(struct request_queue *q)
- 	if (q->tag_set->flags & BLK_MQ_F_NO_SCHED_BY_DEFAULT)
- 		return NULL;
- 
-+#ifdef CONFIG_MQ_IOSCHED_DEFAULT_ADIOS
-+	return elevator_find_get("adios");
-+#else // !CONFIG_MQ_IOSCHED_DEFAULT_ADIOS
-+
- 	if (q->nr_hw_queues != 1 &&
- 	    !blk_mq_is_shared_tags(q->tag_set->flags))
- 		return NULL;
- 
- 	return elevator_find_get("mq-deadline");
-+#endif // !CONFIG_MQ_IOSCHED_DEFAULT_ADIOS
+@@ -830,14 +830,16 @@
+ struct request *elv_rb_former_request(struct request_queue *q,
+ 				      struct request *rq)
+ {
+ 	struct rb_node *rbprev = rb_prev(&rq->rb_node);
+ 	if (rbprev)
+ 		return rb_entry_rq(rbprev);
+ 	return NULL;
  }
++EXPORT_SYMBOL(elv_rb_former_request);
  
- /*
--- 
-2.34.1
+ struct request *elv_rb_latter_request(struct request_queue *q,
+ 				      struct request *rq)
+ {
+ 	struct rb_node *rbnext = rb_next(&rq->rb_node);
+ 	if (rbnext)
+ 		return rb_entry_rq(rbnext);
+ 	return NULL;
+ }
++EXPORT_SYMBOL(elv_rb_latter_request);
+
+ 
 
