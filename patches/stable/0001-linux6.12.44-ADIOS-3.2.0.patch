@@ -2130,7 +2130,7 @@ index 0000000000..c7f380bb65
 diff --git a/block/elevator.c b/block/elevator.c
 --- a/block/elevator.c
 +++ b/block/elevator.c
-@@ -830,14 +830,16 @@
+@@ -830,16 +830,18 @@
  struct request *elv_rb_former_request(struct request_queue *q,
  				      struct request *rq)
  {
@@ -2150,6 +2150,3 @@ diff --git a/block/elevator.c b/block/elevator.c
  	return NULL;
  }
 +EXPORT_SYMBOL(elv_rb_latter_request);
-
- 
-
