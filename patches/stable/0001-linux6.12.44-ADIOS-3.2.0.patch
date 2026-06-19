@@ -2130,13 +2130,13 @@ index 0000000000..c7f380bb65
 diff --git a/block/elevator.c b/block/elevator.c
 --- a/block/elevator.c
 +++ b/block/elevator.c
-@@ -935,4 +935,5 @@
+@@ -830,4 +830,5 @@
  	if (rbprev)
  		return rb_entry_rq(rbprev);
  	return NULL;
  }
 +EXPORT_SYMBOL(elv_rb_former_request);
-@@ -945,4 +946,5 @@
+@@ -840,4 +841,5 @@
  	if (rbnext)
  		return rb_entry_rq(rbnext);
  	return NULL;
